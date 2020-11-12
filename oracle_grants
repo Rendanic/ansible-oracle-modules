@@ -49,6 +49,11 @@ options:
             - The privileges granted to the new schema. Can be a string or a list
         required: false
         default: null
+    proxy_users:
+        description:
+            - The list of users for 'alter user <schema> grant connect through <proxy_user>;'
+        required: false
+        default: null
     object_privs:
         description:
             - The privileges granted to specific objects
@@ -303,7 +308,7 @@ def get_obj_privs (module, msg, cursor, schema, object_privs, grants_mode):
 
     return total_sql_obj
 # Add grants to the schema/role
-def ensure_grants(module, msg, cursor, schema, wanted_grants_list, object_privs, directory_privs, grants_mode, container):
+def ensure_grants(module, msg, cursor, schema, wanted_grants_list, object_privs, directory_privs, grants_mode, proxy_users, container):
 
     add_sql = ''
     remove_sql = ''
@@ -357,6 +362,10 @@ def ensure_grants(module, msg, cursor, schema, wanted_grants_list, object_privs,
     if any(curr_sys_grants):
         total_current.extend(curr_sys_grants)
 
+    # Get the current proxy users for the schema.
+    # => todo
+#    curr_proxy_users=get_current_proxy_users(module, msg, cursor, schema)
+
     # Get the difference between current grants and wanted grants
     grants_to_add=set(wanted_grants_list).difference(total_current)
     grants_to_remove=set(total_current).difference(wanted_grants_list)
@@ -393,6 +402,11 @@ def ensure_grants(module, msg, cursor, schema, wanted_grants_list, object_privs,
         else:
             pass
 
+    if proxy_users:
+
+        for user in proxy_users:
+            proxysql = 'alter user %s grant connect through %s' % (schema, user['name'])
+            total_sql.append(proxysql)
 
     # module.exit_json(msg=total_sql)
     if len(total_sql) > 0:
@@ -533,6 +547,26 @@ def get_current_sys_grants(module, msg, cursor, schema):
 
     return curr_sys_grants
 
+# Get the current proxy users
+def get_current_proxy_users(module, msg, cursor, schema):
+
+    curr_proxy_users=[]
+
+    sql = 'select proxy from proxy_users where client = upper(\'%s\') '% schema
+
+
+    try:
+            cursor.execute(sql)
+            result = cursor.fetchall()
+    except cx_Oracle.DatabaseError as exc:
+            error, = exc.args
+            msg = error.message+ 'sql: ' + sql
+            return False
+    #if result > 0:
+    for item in result:
+        curr_proxy_users.append(item[0].lower())
+
+    return curr_proxy_users
 
 def execute_sql_get(module, msg, cursor, sql):
 
@@ -562,6 +596,7 @@ def main():
             schema        = dict(default=None),
             role          = dict(default=None),
             grants         = dict(default=None, type="list"),
+            proxy_users    = dict(default=None, type="list"),
             object_privs   = dict(default=None, type="list",aliases=['objprivs']),
             directory_privs   = dict(default=None, type="list",aliases=['dirprivs']),
             grants_mode   = dict(default="enforce", choices=["append", "enforce"],aliases=['privs_mode']),
@@ -581,6 +616,7 @@ def main():
     schema = module.params["schema"]
     role = module.params["role"]
     grants = module.params["grants"]
+    proxy_users = module.params["proxy_users"]
     object_privs = module.params["object_privs"]
     directory_privs = module.params["directory_privs"]
     grants_mode = module.params["grants_mode"]
@@ -624,7 +660,7 @@ def main():
 
     if state == 'present' and schema:
         if check_user_exists(module, msg, cursor, schema):
-            if ensure_grants(module, msg, cursor, schema, grants, object_privs, directory_privs, grants_mode, container):
+            if ensure_grants(module, msg, cursor, schema, grants, object_privs, directory_privs, grants_mode, proxy_users, container):
                 #msg = 'The grant(s) (%s) have been added to %s successfully' % (grants, schema)
                 module.exit_json(msg=msg, changed=True)
             else:
@@ -635,7 +671,7 @@ def main():
 
     elif state == 'present' and role:
         if check_role_exists(module, msg, cursor, role):
-            ensure_grants(module, msg, cursor, role, grants, object_privs,directory_privs, grants_mode, container)
+            ensure_grants(module, msg, cursor, role, grants, object_privs,directory_privs, grants_mode, proxy_users, container)
                 #msg = 'The grant(s) (%s) have been added to %s successfully' % (grants, schema)
             module.exit_json(msg=msg, changed=False)
             # else:
